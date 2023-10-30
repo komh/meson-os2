@@ -112,7 +112,7 @@ known_build_target_kwargs = (
     cs_kwargs)
 
 known_exe_kwargs = known_build_target_kwargs | {'implib', 'export_dynamic', 'pie'}
-known_shlib_kwargs = known_build_target_kwargs | {'version', 'soversion', 'vs_module_defs', 'darwin_versions'}
+known_shlib_kwargs = known_build_target_kwargs | {'version', 'soversion', 'vs_module_defs', 'darwin_versions', 'shortname'}
 known_shmod_kwargs = known_build_target_kwargs | {'vs_module_defs'}
 known_stlib_kwargs = known_build_target_kwargs | {'pic', 'prelink'}
 known_jar_kwargs = known_exe_kwargs | {'main_class', 'java_resources'}
@@ -1992,6 +1992,7 @@ class SharedLibrary(BuildTarget):
         # Max length 2, first element is compatibility_version, second is current_version
         self.darwin_versions = []
         self.vs_module_defs = None
+        self.shortname = None
         # The import library this target will generate
         self.import_filename = None
         # The import library that Visual Studio would generate (and accept)
@@ -2131,12 +2132,10 @@ class SharedLibrary(BuildTarget):
         elif self.environment.machines[self.for_machine].is_os2():
             suffix = 'dll'
             self.import_filename = f'{self.name}_dll.a'
+            self.filename_tpl = '{0.shortname}' if self.shortname else '{0.name}'
             if self.soversion:
-                # fooX.dll
-                self.filename_tpl = '{0.name}{0.soversion}.{0.suffix}'
-            else:
-                # No versioning, foo.dll
-                self.filename_tpl = '{0.name}.{0.suffix}'
+                self.filename_tpl += '{0.soversion}'
+            self.filename_tpl += '.{0.suffix}'
         else:
             prefix = 'lib'
             suffix = 'so'
@@ -2255,6 +2254,10 @@ class SharedLibrary(BuildTarget):
                     'Shared library vs_module_defs must be either a string, '
                     'a file object or a Custom Target')
             self.process_link_depends(path)
+
+        # OS/2 uses a 8.3 name for a DLL
+        if 'shortname' in kwargs:
+            self.shortname = kwargs['shortname']
 
         if 'rust_crate_type' in kwargs:
             rust_crate_type = kwargs['rust_crate_type']
