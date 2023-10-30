@@ -1941,7 +1941,7 @@ class StaticLibrary(BuildTarget):
         # the import library. Using libfoo.a is ok because people using MSVC
         # always pass the library filename while linking anyway.
         if not hasattr(self, 'prefix'):
-            self.prefix = 'lib'
+            self.prefix = '' if self.environment.machines[self.for_machine].is_os2() else 'lib'
         if not hasattr(self, 'suffix'):
             if 'rust' in self.compilers:
                 if not hasattr(self, 'rust_crate_type') or self.rust_crate_type == 'rlib':
