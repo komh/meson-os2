@@ -2245,6 +2245,21 @@ class NinjaBackend(backends.Backend):
                 options = self._rsp_options(compiler)
                 self.add_rule(NinjaRule(rule, command, args, description, **options, extra=pool))
 
+                if mesonlib.is_os2():
+                    rule = '{}_DLL_LINKER{}'.format(langname, self.get_rule_suffix(for_machine))
+                    command = compiler.get_linker_exelist()
+                    args =  ['$ARGS'] + NinjaCommandArg.list(compiler.get_linker_output_args('$out'), Quoting.none) + ['$in', '$LINK_ARGS']
+                    args += ['&&', 'emximp', '-o', '$IMPLIB', '$out']
+
+                    description = 'Linking target $out'
+                    if num_pools > 0:
+                        pool = 'pool = link_pool'
+                    else:
+                        pool = None
+
+                    options = self._rsp_options(compiler)
+                    self.add_rule(NinjaRule(rule, command, args, description, **options, extra=pool))
+
         args = self.environment.get_build_command() + \
             ['--internal',
              'symbolextractor',
@@ -3200,6 +3215,8 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
             linker_base = 'STATIC'
         else:
             linker_base = linker.get_language() # Fixme.
+            if mesonlib.is_os2() and isinstance(target, build.SharedLibrary):
+                linker_base += '_DLL'
         if isinstance(target, build.SharedLibrary):
             self.generate_shsym(target)
         crstr = self.get_rule_suffix(target.for_machine)
@@ -3333,6 +3350,9 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
         elem = NinjaBuildElement(self.all_outputs, outname, linker_rule, obj_list, implicit_outs=implicit_outs)
         elem.add_dep(dep_targets + custom_target_libraries)
         elem.add_item('LINK_ARGS', commands)
+        if mesonlib.is_os2() and isinstance(target, build.SharedLibrary):
+            # The library we will actually link to, which is an import library on OS/2 (not the DLL)
+            elem.add_item('IMPLIB', [self.get_target_filename_for_linking(target)])
         return elem
 
     def get_dependency_filename(self, t):
