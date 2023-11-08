@@ -1230,6 +1230,7 @@ BUILTIN_CORE_OPTIONS: 'MutableKeyedOptionDictType' = OrderedDict([
     (OptionKey('werror'),          BuiltinOption(UserBooleanOption, 'Treat warnings as errors', False, yielding=False)),
     (OptionKey('wrap_mode'),       BuiltinOption(UserComboOption, 'Wrap mode', 'default', choices=['default', 'nofallback', 'nodownload', 'forcefallback', 'nopromote'])),
     (OptionKey('force_fallback_for'), BuiltinOption(UserArrayOption, 'Force fallback for those subprojects', [])),
+    (OptionKey('emxomf'),          BuiltinOption(UserBooleanOption, "Whether to use OMF format on OS/2", False)),
 
     # Pkgconfig module
     (OptionKey('relocatable', module='pkgconfig'),

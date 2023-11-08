@@ -336,6 +336,8 @@ def get_option_value(options: 'KeyedOptionDictType', opt: OptionKey, fallback: '
 
 def get_base_compile_args(options: 'KeyedOptionDictType', compiler: 'Compiler') -> T.List[str]:
     args = []  # type T.List[str]
+    if mesonlib.is_os2() and options[OptionKey('emxomf')].value:
+        args += ['-Zomf']
     try:
         if options[OptionKey('b_lto')].value:
             args.extend(compiler.get_lto_compile_args(
