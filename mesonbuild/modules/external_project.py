@@ -1,16 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2020 The Meson development team
 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-
-#     http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+from __future__ import annotations
 
 from pathlib import Path
 import os
@@ -22,20 +13,25 @@ from . import ExtensionModule, ModuleReturnValue, NewExtensionModule, ModuleInfo
 from .. import mlog, build
 from ..compilers.compilers import CFLAGS_MAPPING
 from ..envconfig import ENV_VAR_PROG_MAP
-from ..dependencies import InternalDependency, PkgConfigDependency
+from ..dependencies import InternalDependency
+from ..dependencies.pkgconfig import PkgConfigInterface
 from ..interpreterbase import FeatureNew
 from ..interpreter.type_checking import ENV_KW, DEPENDS_KW
 from ..interpreterbase.decorators import ContainerTypeInfo, KwargInfo, typed_kwargs, typed_pos_args
 from ..mesonlib import (EnvironmentException, MesonException, Popen_safe, MachineChoice,
-                        get_variable_regex, do_replacement, join_args, OptionKey)
+                        get_variable_regex, do_replacement, join_args)
+from ..options import OptionKey
 
 if T.TYPE_CHECKING:
     from typing_extensions import TypedDict
 
     from . import ModuleState
+    from .._typing import ImmutableListProtocol
+    from ..build import BuildTarget, CustomTarget
     from ..interpreter import Interpreter
     from ..interpreterbase import TYPE_var
-    from ..build import BuildTarget, CustomTarget
+    from ..mesonlib import EnvironmentVariables
+    from ..utils.core import EnvironOrDict
 
     class Dependency(TypedDict):
 
@@ -46,17 +42,20 @@ if T.TYPE_CHECKING:
         configure_options: T.List[str]
         cross_configure_options: T.List[str]
         verbose: bool
-        env: build.EnvironmentVariables
+        env: EnvironmentVariables
         depends: T.List[T.Union[BuildTarget, CustomTarget]]
 
 
 class ExternalProject(NewExtensionModule):
+
+    make: ImmutableListProtocol[str]
+
     def __init__(self,
                  state: 'ModuleState',
                  configure_command: str,
                  configure_options: T.List[str],
                  cross_configure_options: T.List[str],
-                 env: build.EnvironmentVariables,
+                 env: EnvironmentVariables,
                  verbose: bool,
                  extra_depends: T.List[T.Union['BuildTarget', 'CustomTarget']]):
         super().__init__()
@@ -67,8 +66,6 @@ class ExternalProject(NewExtensionModule):
         self.project_version = state.project_version
         self.subproject = state.subproject
         self.env = state.environment
-        self.build_machine = state.build_machine
-        self.host_machine = state.host_machine
         self.configure_command = configure_command
         self.configure_options = configure_options
         self.cross_configure_options = cross_configure_options
@@ -128,16 +125,17 @@ class ExternalProject(NewExtensionModule):
         configure_cmd += self._format_options(self.configure_options, d)
 
         if self.env.is_cross_build():
-            host = '{}-{}-{}'.format(self.host_machine.cpu_family,
-                                     self.build_machine.system,
-                                     self.host_machine.system)
+            host = '{}-{}-{}'.format(state.environment.machines.host.cpu,
+                                     'pc' if state.environment.machines.host.cpu_family in {"x86", "x86_64"}
+                                     else 'unknown',
+                                     state.environment.machines.host.system)
             d = [('HOST', None, host)]
             configure_cmd += self._format_options(self.cross_configure_options, d)
 
         # Set common env variables like CFLAGS, CC, etc.
         link_exelist: T.List[str] = []
         link_args: T.List[str] = []
-        self.run_env = os.environ.copy()
+        self.run_env: EnvironOrDict = os.environ.copy()
         for lang, compiler in self.env.coredata.compilers[MachineChoice.HOST].items():
             if any(lang not in i for i in (ENV_VAR_PROG_MAP, CFLAGS_MAPPING)):
                 continue
@@ -158,8 +156,8 @@ class ExternalProject(NewExtensionModule):
         self.run_env['LDFLAGS'] = self._quote_and_join(link_args)
 
         self.run_env = self.user_env.get_env(self.run_env)
-        self.run_env = PkgConfigDependency.setup_env(self.run_env, self.env, MachineChoice.HOST,
-                                                     uninstalled=True)
+        self.run_env = PkgConfigInterface.setup_env(self.run_env, self.env, MachineChoice.HOST,
+                                                    uninstalled=True)
 
         self.build_dir.mkdir(parents=True, exist_ok=True)
         self._run('configure', configure_cmd, workdir)
@@ -199,7 +197,7 @@ class ExternalProject(NewExtensionModule):
     def _run(self, step: str, command: T.List[str], workdir: Path) -> None:
         mlog.log(f'External project {self.name}:', mlog.bold(step))
         m = 'Running command ' + str(command) + ' in directory ' + str(workdir) + '\n'
-        log_filename = Path(mlog.log_dir, f'{self.name}-{step}.log')
+        log_filename = Path(mlog.get_log_dir(), f'{self.name}-{step}.log')
         output = None
         if not self.verbose:
             output = open(log_filename, 'w', encoding='utf-8')
@@ -223,7 +221,7 @@ class ExternalProject(NewExtensionModule):
                 '--srcdir', self.src_dir.as_posix(),
                 '--builddir', self.build_dir.as_posix(),
                 '--installdir', self.install_dir.as_posix(),
-                '--logdir', mlog.log_dir,
+                '--logdir', mlog.get_log_dir(),
                 '--make', join_args(self.make),
                 ]
         if self.verbose:
@@ -240,6 +238,7 @@ class ExternalProject(NewExtensionModule):
             depfile=f'{self.name}.d',
             console=True,
             extra_depends=extra_depends,
+            description='Generating external project {}',
         )
 
         idir = build.InstallDir(self.subdir.as_posix(),
@@ -269,7 +268,7 @@ class ExternalProject(NewExtensionModule):
         link_args = [f'-L{abs_libdir}', f'-l{libname}']
         sources = self.target
         dep = InternalDependency(version, [], compile_args, link_args, [],
-                                 [], [sources], [], {}, [], [])
+                                 [], [sources], [], [], {}, [], [], [])
         return dep
 
 

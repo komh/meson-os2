@@ -143,6 +143,8 @@ test('test5', executable('prog5', 'prog5.c'))
 conf6 = configuration_data()
 conf6.set('var1', 'foo')
 conf6.set('var2', 'bar')
+conf6.set('var3', 'baz')
+conf6.set('var4', 'qux')
 configure_file(
   input : 'config6.h.in',
   output : '@BASENAME@',
@@ -161,7 +163,7 @@ cfile = configure_file(input : 'config.h.in',
   install_dir : false,
   configuration : conf)
 
-# test intsall_dir with install: false
+# test install_dir with install: false
 cfile = configure_file(input : 'config.h.in',
   output : 'do_not_get_installed_in_install_dir.h',
   install : false,
@@ -308,9 +310,15 @@ cdata = configuration_data({
   'A_UNDEFINED' : false,
 })
 
+# merging a confdata into another one should not mark the first as immutable
+cdata_test = configuration_data()
+cdata_test.merge_from(cdata)
+cdata.set_quoted('A_PATH', '/random/path')
+
 configure_file(output : 'config9a.h',
   configuration : cdata,
 )
+
 
 configure_file(output : 'config9b.h',
   configuration : {

@@ -1,16 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2018 The Meson development team
 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-
-#     http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 from __future__ import annotations
 
 import argparse
@@ -23,10 +13,9 @@ from ..mesonlib import version_compare
 from ..programs import ExternalProgram
 import typing as T
 
-def run_clang_format(fname: Path, exelist: T.List[str], check: bool) -> subprocess.CompletedProcess:
+def run_clang_format(fname: Path, exelist: T.List[str], check: bool, cformat_ver: T.Optional[str]) -> subprocess.CompletedProcess:
     clangformat_10 = False
-    if check:
-        cformat_ver = ExternalProgram('clang-format', exelist).get_version()
+    if check and cformat_ver:
         if version_compare(cformat_ver, '>=10'):
             clangformat_10 = True
             exelist = exelist + ['--dry-run', '--Werror']
@@ -58,4 +47,9 @@ def run(args: T.List[str]) -> int:
         print('Could not execute clang-format "%s"' % ' '.join(exelist))
         return 1
 
-    return run_tool('clang-format', srcdir, builddir, run_clang_format, exelist, options.check)
+    if options.check:
+        cformat_ver = ExternalProgram('clang-format', exelist, silent=True).get_version()
+    else:
+        cformat_ver = None
+
+    return run_tool('clang-format', srcdir, builddir, run_clang_format, exelist, options.check, cformat_ver)
