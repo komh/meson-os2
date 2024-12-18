@@ -6,7 +6,7 @@ from __future__ import annotations
 from ..mesonlib import (
     MesonException, EnvironmentException, MachineChoice, join_args,
     search_version, is_windows, Popen_safe, Popen_safe_logged, windows_proof_rm,
-    is_os2, OptionKey,
+    is_os2,
 )
 from ..envconfig import BinaryTable
 from .. import mlog
@@ -157,6 +157,7 @@ def _handle_exceptions(
 def detect_static_linker(env: 'Environment', compiler: Compiler) -> StaticLinker:
     from . import d
     from ..linkers import linkers
+    from ..options import OptionKey
     linker = env.lookup_binary_entry(compiler.for_machine, 'ar')
     if linker is not None:
         trials = [linker]
