@@ -2353,8 +2353,9 @@ class SharedLibrary(BuildTarget):
             self.filename_tpl = '{0.prefix}{0.name}.{0.suffix}'
         elif self.environment.machines[self.for_machine].is_os2():
             suffix = 'dll'
-            self.import_filename = f'{self.name}_dll'
-            self.import_filename += '.lib' if self.environment.coredata.get_option(OptionKey('emxomf')) else '.a'
+            # Import library is called foo_dll.a or foo_dll.lib
+            import_suffix = '.lib' if self.environment.coredata.get_option(OptionKey('emxomf')) else '.a'
+            import_filename_tpl = '{0.name}_dll' + import_suffix
             self.filename_tpl = '{0.shortname}' if self.shortname else '{0.name}'
             if self.soversion:
                 self.filename_tpl += '{0.soversion}'
