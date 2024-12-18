@@ -1,16 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2016-2021 The Meson development team
-
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-
-#     http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import subprocess
 import tempfile
@@ -176,6 +165,17 @@ class SubprojectsCommandTests(BasePlatformTests):
         self.assertEqual(self._git_local_branch(subp_name), 'newbranch')
         self.assertEqual(self._git_local_commit(subp_name), self._git_remote_commit(subp_name, 'newbranch'))
         self.assertTrue(self._git_local(['stash', 'list'], subp_name))
+
+        # Untracked files need to be stashed too, or (re-)applying a patch
+        # creating one of those untracked files will fail.
+        untracked = self.subprojects_dir / subp_name / 'untracked.c'
+        untracked.write_bytes(b'int main(void) { return 0; }')
+        self._subprojects_cmd(['update', '--reset'])
+        self.assertTrue(self._git_local(['stash', 'list'], subp_name))
+        assert not untracked.exists()
+        # Ensure it was indeed stashed, and we can get it back.
+        self.assertTrue(self._git_local(['stash', 'pop'], subp_name))
+        assert untracked.exists()
 
         # Create a new remote tag and update the wrap file. Checks that
         # "meson subprojects update --reset" checkout the new tag in detached mode.
