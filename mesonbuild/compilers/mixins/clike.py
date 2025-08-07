@@ -1063,7 +1063,7 @@ class CLikeCompiler(Compiler):
             prefixes = ['cyg'] + prefixes
         elif env.machines[self.for_machine].is_os2():
             from ...options import OptionKey
-            if env.coredata.get_option(OptionKey('emxomf')):
+            if env.coredata.optstore.get_value_for(OptionKey('emxomf')):
                 stlibext = ['_s.lib', '_s.a', 'lib', 'a']
                 shlibext = ['_dll.lib', '_dll.a', 'lib', 'a', 'dll']
             else:

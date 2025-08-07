@@ -267,7 +267,7 @@ def are_asserts_disabled_for_subproject(subproject: str, env: 'Environment') -> 
 
 def get_base_compile_args(target: 'BuildTarget', compiler: 'Compiler', env: 'Environment') -> T.List[str]:
     args: T.List[str] = []
-    if mesonlib.is_os2() and options.get_value('emxomf'):
+    if mesonlib.is_os2() and env.coredata.get_option_for_target(target, 'emxomf'):
         args += ['-Zomf']
     try:
         if env.coredata.get_option_for_target(target, 'b_lto'):
