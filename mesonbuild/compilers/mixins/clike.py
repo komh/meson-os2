@@ -1062,13 +1062,8 @@ class CLikeCompiler(Compiler):
             shlibext = ['dll', 'dll.a']
             prefixes = ['cyg'] + prefixes
         elif env.machines[self.for_machine].is_os2():
-            from ...options import OptionKey
-            if env.coredata.optstore.get_value_for(OptionKey('emxomf')):
-                stlibext = ['_s.lib', '_s.a', 'lib', 'a']
-                shlibext = ['_dll.lib', '_dll.a', 'lib', 'a', 'dll']
-            else:
-                stlibext = ['_s.a', 'a']
-                shlibext = ['_dll.a', 'a', 'dll']
+            stlibext = ['_s.lib', '_s.a', 'lib', 'a']
+            shlibext = ['_dll.lib', '_dll.a', 'lib', 'a', 'dll']
         elif self.id.lower() in {'c6000', 'c2000', 'ti'}:
             # TI C28x compilers can use both extensions for static or dynamic libs.
             stlibext = ['a', 'lib']
