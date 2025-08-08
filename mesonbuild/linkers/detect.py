@@ -129,6 +129,7 @@ def guess_nix_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
     :extra_args: Any additional arguments required (such as a source file)
     """
     from . import linkers
+    from ..options import OptionKey
     env.coredata.add_lang_args(comp_class.language, comp_class, for_machine, env)
     extra_args = extra_args or []
 
@@ -146,6 +147,9 @@ def guess_nix_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
     if value is not None:
         override = comp_class.use_linker_args(value[0], comp_version)
         check_args += override
+
+    if env.machines[for_machine].is_os2() and env.coredata.optstore.get_value_for(OptionKey('emxomf')):
+        check_args += ['-Zomf']
 
     mlog.debug('-----')
     p, o, e = Popen_safe_logged(compiler + check_args, msg='Detecting linker via')
@@ -217,8 +221,12 @@ def guess_nix_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
         linker = linkers.AIXDynamicLinker(
             compiler, for_machine, comp_class.LINKER_PREFIX, override,
             version=search_version(e))
-    elif 'ld.exe: unrecognized option' in e or 'emxomfld: invalid option' in e:
-        linker = linkers.OS2DynamicLinker(
+    elif 'ld.exe: unrecognized option' in e:
+        linker = linkers.OS2AoutDynamicLinker(
+            compiler, for_machine, comp_class.LINKER_PREFIX, override,
+            version='none')
+    elif 'emxomfld: invalid option' in e:
+        linker = linkers.OS2OmfDynamicLinker(
             compiler, for_machine, comp_class.LINKER_PREFIX, override,
             version='none')
     elif o.startswith('zig ld'):

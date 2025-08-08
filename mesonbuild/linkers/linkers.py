@@ -1694,8 +1694,6 @@ class OS2DynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
 
     """ld and emxomfld"""
 
-    id = 'ld.os2'
-
     def get_accepts_rsp(self) -> bool:
         return True
 
@@ -1711,6 +1709,14 @@ class OS2DynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
     def get_soname_args(self, env: 'Environment', prefix: str, shlib_name: str,
                         suffix: str, soversion: str, darwin_versions: T.Tuple[str, str]) -> T.List[str]:
         return []
+
+
+class OS2AoutDynamicLinker(OS2DynamicLinker):
+    id = 'ld.os2'
+
+
+class OS2OmfDynamicLinker(OS2DynamicLinker):
+    id = 'emxomfld'
 
 
 class MetrowerksLinker(DynamicLinker):
