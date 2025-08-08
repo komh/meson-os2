@@ -2417,21 +2417,6 @@ class NinjaBackend(backends.Backend):
 
                 options = self._rsp_options(compiler)
                 self.add_rule(NinjaRule(rule, command, args, description, **options, extra=pool))
-                if mesonlib.is_os2():
-                    rule = '{}_DLL_LINKER{}'.format(langname, self.get_rule_suffix(for_machine))
-                    command = compiler.get_linker_exelist()
-                    args =  ['$ARGS'] + NinjaCommandArg.list(compiler.get_linker_output_args('$out'), Quoting.none) + ['$in', '$LINK_ARGS']
-                    args += ['&&', 'emximp', '-o', '$IMPLIB', '$out']
-
-                    description = 'Linking target $out'
-                    if num_pools > 0:
-                        pool = 'pool = link_pool'
-                    else:
-                        pool = None
-
-                    options = self._rsp_options(compiler)
-                    self.add_rule(NinjaRule(rule, command, args, description, **options, extra=pool))
-
             if self.environment.machines[for_machine].is_aix() and complist:
                 rule = 'AIX_LINKER{}'.format(self.get_rule_suffix(for_machine))
                 description = 'Archiving AIX shared library'
@@ -2439,6 +2424,13 @@ class NinjaBackend(backends.Backend):
                 args = []
                 options = {}
                 self.add_rule(NinjaRule(rule, cmdlist, args, description, **options, extra=None))
+            if self.environment.machines[for_machine].is_os2() and complist:
+                rule = 'IMPORTLIB{}'.format(self.get_rule_suffix(for_machine))
+                description = 'Generating import library $out'
+                command = ['emximp']
+                args = ['-o', '$out', '$in']
+                options = {}
+                self.add_rule(NinjaRule(rule, command, args, description, **options, extra=None))
 
         args = self.environment.get_build_command() + \
             ['--internal',
@@ -3367,7 +3359,12 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
         return os.path.join(targetdir, target.get_filename() + '.symbols')
 
     def generate_shsym(self, target) -> None:
-        target_file = self.get_target_filename(target)
+        # On OS/2, an import library is generated after linking a DLL, so
+        # if a DLL is used as a target, import library is not generated.
+        if self.environment.machines[target.for_machine].is_os2():
+            target_file = self.get_target_filename_for_linking(target)
+        else:
+            target_file = self.get_target_filename(target)
         if isinstance(target, build.SharedLibrary) and target.aix_so_archive:
             if self.environment.machines[target.for_machine].is_aix():
                 linker, stdlib_args = target.get_clink_dynamic_linker_and_stdlibs()
@@ -3584,10 +3581,13 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
             linker_base = 'STATIC'
         else:
             linker_base = linker.get_language() # Fixme.
-            if mesonlib.is_os2() and isinstance(target, build.SharedLibrary):
-                linker_base += '_DLL'
         if isinstance(target, build.SharedLibrary):
             self.generate_shsym(target)
+            if self.environment.machines[target.for_machine].is_os2():
+                target_file = self.get_target_filename(target)
+                import_name = self.get_import_filename(target)
+                elem = NinjaBuildElement(self.all_outputs, import_name, 'IMPORTLIB', target_file)
+                self.add_build(elem)
         crstr = self.get_rule_suffix(target.for_machine)
         linker_rule = linker_base + '_LINKER' + crstr
         # Create an empty commands list, and start adding link arguments from
@@ -3724,9 +3724,6 @@ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=47485'''))
             elem.add_item('ARGS', compile_args)
 
         elem.add_item('LINK_ARGS', commands)
-        if mesonlib.is_os2() and isinstance(target, build.SharedLibrary):
-            # The library we will actually link to, which is an import library on OS/2 (not the DLL)
-            elem.add_item('IMPLIB', [self.get_target_filename_for_linking(target)])
         self.create_target_linker_introspection(target, linker, commands)
         return elem
 
