@@ -1005,19 +1005,17 @@ class CLikeCompiler(Compiler):
 
     def _get_patterns(self, env: 'Environment', prefixes: T.List[str], suffixes: T.List[str], shared: bool = False) -> T.List[str]:
         patterns: T.List[str] = []
-        for p in prefixes:
-            for s in suffixes:
-                # On OS/2, search order for shared libs is
-                #   1. libfoo_dll.a
-                #   2. foo_dll.a
-                #   3. libfoo.a
-                #   4. foo.a
-                #   5. foo.dll
-                # For static libs, `_s' is used instead of `_dll'.
-                if env.machines[self.for_machine].is_os2() and (s.startswith('_dll.') or s.startswith('_s.')):
-                    patterns.append(p + '{}' + s)
-                else:
-                    patterns.append(p + '{}.' + s)
+        # On OS/2, search order for shared libs is
+        #   1. libfoo_dll.a
+        #   2. foo_dll.a
+        #   3. libfoo.a
+        #   4. foo.a
+        #   5. foo.dll
+        # For static libs, `_s' is used instead of `_dll'.
+        for s in suffixes:
+            dot = '' if env.machines[self.for_machine].is_os2() and s.startswith(('_dll.', '_s.')) else '.'
+            for p in prefixes:
+                patterns.append(p + '{}' + dot + s)
         if shared and env.machines[self.for_machine].is_openbsd():
             # Shared libraries on OpenBSD can be named libfoo.so.X.Y:
             # https://www.openbsd.org/faq/ports/specialtopics.html#SharedLibs
