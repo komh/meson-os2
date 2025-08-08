@@ -2190,7 +2190,7 @@ class StaticLibrary(BuildTarget):
         # See our FAQ for more detailed rationale:
         # https://mesonbuild.com/FAQ.html#why-does-building-my-project-with-msvc-output-static-libraries-called-libfooa
         if not hasattr(self, 'prefix'):
-            self.prefix = '' if self.environment.machines[self.for_machine].is_os2() else 'lib'
+            self.prefix = 'lib'
         if not hasattr(self, 'suffix'):
             if self.uses_rust():
                 if self.rust_crate_type == 'rlib':
