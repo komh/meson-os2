@@ -1041,9 +1041,6 @@ class CLikeCompiler(Compiler):
         elif self.info.is_cygwin():
             shlibext = ['dll', 'dll.a']
             prefixes = ['cyg'] + prefixes
-        elif env.machines[self.for_machine].is_os2():
-            stlibext = ['_s.lib', '_s.a', 'lib', 'a']
-            shlibext = ['_dll.lib', '_dll.a', 'lib', 'a', 'dll']
         elif self.id.lower() in {'c6000', 'c2000', 'ti'}:
             # TI C28x compilers can use both extensions for static or dynamic libs.
             stlibext = ['a', 'lib']

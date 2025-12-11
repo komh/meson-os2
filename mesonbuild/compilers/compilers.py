@@ -342,8 +342,6 @@ def get_base_link_args(target: 'BuildTarget',
                        linker: 'Compiler',
                        env: 'Environment') -> T.List[str]:
     args: T.List[str] = []
-    if mesonlib.is_os2():
-        args += ['-Zomf']
     build_dir = env.get_build_dir()
     try:
         if env.coredata.get_option_for_target(target, 'b_lto'):

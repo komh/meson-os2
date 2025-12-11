@@ -224,14 +224,6 @@ def guess_nix_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
         linker = linkers.AIXDynamicLinker(
             compiler, env, for_machine, comp_class.LINKER_PREFIX, override,
             version=search_version(e))
-    elif 'ld.exe: unrecognized option' in e:
-        linker = linkers.OS2AoutDynamicLinker(
-            compiler, for_machine, comp_class.LINKER_PREFIX, override,
-            version='none')
-    elif 'emxomfld: invalid option' in e:
-        linker = linkers.OS2OmfDynamicLinker(
-            compiler, for_machine, comp_class.LINKER_PREFIX, override,
-            version='none')
     elif o.startswith('zig ld'):
         linker = linkers.ZigCCDynamicLinker(
             compiler, env, for_machine, comp_class.LINKER_PREFIX, override, version=v)

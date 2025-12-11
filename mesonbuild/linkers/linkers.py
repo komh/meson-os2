@@ -541,15 +541,6 @@ class AIXArLinker(ArLikeLinker, StaticLinker):
     std_args = ['-csr', '-Xany']
 
 
-class EmxomfArLinker(ArLinker):
-    id = 'emxomfar'
-
-    def can_linker_accept_rsp(self) -> bool:
-        return True
-
-    def get_std_link_args(self, env: 'Environment', is_thin: bool) -> T.List[str]:
-        return ['cr']
-
 class MetrowerksStaticLinker(StaticLinker):
 
     def can_linker_accept_rsp(self) -> bool:
@@ -1783,35 +1774,6 @@ class CudaLinker(PosixDynamicLinkerMixin, DynamicLinker):
                         soversion: str, darwin_versions: T.Tuple[str, str]
                         ) -> T.List[str]:
         return []
-
-
-class OS2DynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
-
-    """ld and emxomfld"""
-
-    def get_accepts_rsp(self) -> bool:
-        return True
-
-    def get_allow_undefined_args(self) -> T.List[str]:
-        return []
-
-    def thread_flags(self, env: 'Environment') -> T.List[str]:
-        return ['-lpthread']
-
-    def get_std_shared_lib_args(self) -> T.List[str]:
-        return ['-Zdll']
-
-    def get_soname_args(self, env: 'Environment', prefix: str, shlib_name: str,
-                        suffix: str, soversion: str, darwin_versions: T.Tuple[str, str]) -> T.List[str]:
-        return []
-
-
-class OS2AoutDynamicLinker(OS2DynamicLinker):
-    id = 'ld.os2'
-
-
-class OS2OmfDynamicLinker(OS2DynamicLinker):
-    id = 'emxomfld'
 
 
 class MetrowerksLinker(DynamicLinker):
