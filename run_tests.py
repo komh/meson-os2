@@ -32,7 +32,9 @@ from mesonbuild import mesonlib
 from mesonbuild import mesonmain
 from mesonbuild import mtest
 from mesonbuild import mlog
-from mesonbuild.environment import Environment, detect_ninja, detect_machine_info
+from mesonbuild.environment import Environment
+from mesonbuild.envconfig import detect_machine_info
+from mesonbuild.tooldetect import detect_ninja
 from mesonbuild.coredata import version as meson_version
 from mesonbuild.options import backendlist
 from mesonbuild.mesonlib import setup_vsenv
@@ -135,10 +137,6 @@ class FakeBuild:
     def __init__(self, env):
         self.environment = env
 
-class FakeCompilerOptions:
-    def __init__(self):
-        self.value = []
-
 def get_fake_options(prefix: str = '') -> SharedCMDOptions:
     opts = T.cast('SharedCMDOptions', argparse.Namespace())
     opts.native_file = []
@@ -153,7 +151,6 @@ def get_fake_env(sdir: str = '', bdir: T.Optional[str] = None, prefix: str = '',
     if opts is None:
         opts = get_fake_options(prefix)
     env = Environment(sdir, bdir, opts)
-    env.coredata.optstore.set_value_object(OptionKey('c_args'),  FakeCompilerOptions())
     env.machines.host.cpu_family = 'x86_64' # Used on macOS inside find_library
     # Invalidate cache when using a different Environment object.
     clear_meson_configure_class_caches()
@@ -294,7 +291,7 @@ def run_mtest_inprocess(commandlist: T.List[str]) -> T.Tuple[int, str]:
 def clear_meson_configure_class_caches() -> None:
     CCompiler.find_library_cache.clear()
     CCompiler.find_framework_cache.clear()
-    PkgConfigInterface.class_impl.assign(False, False)
+    PkgConfigInterface.class_impl.assign({}, {})
     mesonlib.project_meson_versions.clear()
 
 def run_configure_inprocess(commandlist: T.List[str], env: T.Optional[T.Dict[str, str]] = None, catch_exception: bool = False) -> T.Tuple[int, str, str]:

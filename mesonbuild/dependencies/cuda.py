@@ -11,35 +11,40 @@ from pathlib import Path
 
 from .. import mesonlib
 from .. import mlog
-from ..environment import detect_cpu_family
 from .base import DependencyException, SystemDependency
 from .detect import packages
-
+from ..mesonlib import LibType
 
 if T.TYPE_CHECKING:
     from ..environment import Environment
     from ..compilers import Compiler
+    from ..envconfig import MachineInfo
+    from .base import DependencyObjectKWs
 
     TV_ResultTuple = T.Tuple[T.Optional[str], T.Optional[str], bool]
 
 class CudaDependency(SystemDependency):
 
     supported_languages = ['cpp', 'c', 'cuda'] # see also _default_language
+    targets_dir = 'targets' # Directory containing CUDA targets.
 
-    def __init__(self, environment: 'Environment', kwargs: T.Dict[str, T.Any]) -> None:
-        compilers = environment.coredata.compilers[self.get_for_machine_from_kwargs(kwargs)]
+    def __init__(self, environment: 'Environment', kwargs: DependencyObjectKWs) -> None:
+        for_machine = kwargs.get('native', mesonlib.MachineChoice.HOST)
+        compilers = environment.coredata.compilers[for_machine]
+        machine = environment.machines[for_machine]
         language = self._detect_language(compilers)
+
         if language not in self.supported_languages:
             raise DependencyException(f'Language \'{language}\' is not supported by the CUDA Toolkit. Supported languages are {self.supported_languages}.')
 
         super().__init__('cuda', environment, kwargs, language=language)
         self.lib_modules: T.Dict[str, T.List[str]] = {}
-        self.requested_modules = self.get_requested(kwargs)
+        self.requested_modules = kwargs.get('modules', [])
         if not any(runtime in self.requested_modules for runtime in ['cudart', 'cudart_static']):
             # By default, we prefer to link the static CUDA runtime, since this is what nvcc also does by default:
             # https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#cudart-none-shared-static-cudart
             req_modules = ['cudart']
-            if kwargs.get('static', True):
+            if kwargs.get('static') is not False:
                 req_modules = ['cudart_static']
             self.requested_modules = req_modules + self.requested_modules
 
@@ -50,15 +55,24 @@ class CudaDependency(SystemDependency):
         if not os.path.isabs(self.cuda_path):
             raise DependencyException(f'CUDA Toolkit path must be absolute, got \'{self.cuda_path}\'.')
 
+        # Cuda target directory relative to cuda path.
+        self.target_path = self._detect_target_path(machine)
+
         # nvcc already knows where to find the CUDA Toolkit, but if we're compiling
         # a mixed C/C++/CUDA project, we still need to make the include dir searchable
         if self.language != 'cuda' or len(compilers) > 1:
-            self.incdir = os.path.join(self.cuda_path, 'include')
+            self.incdir = os.path.join(self.cuda_path, self.target_path, 'include')
             self.compile_args += [f'-I{self.incdir}']
 
         arch_libdir = self._detect_arch_libdir()
-        self.libdir = os.path.join(self.cuda_path, arch_libdir)
+        self.libdir = os.path.join(self.cuda_path, self.target_path, arch_libdir)
         mlog.debug('CUDA library directory is', mlog.bold(self.libdir))
+
+        # For legacy reasons cuda ignores the `prefer_static` option, and treats
+        # anything short of `static : false` as `static : true`. This is the
+        # opposite behavior of all other languages.
+        if kwargs.get('static') is None:
+            self.libtype = LibType.PREFER_STATIC
 
         self.is_found = self._find_requested_libraries()
 
@@ -127,6 +141,32 @@ class CudaDependency(SystemDependency):
         if nvcc_warning:
             mlog.warning(nvcc_warning)
         return (None, None, False)
+
+    def _detect_target_path(self, machine: MachineInfo) -> str:
+        # Non-Linux hosts: nothing to detect.
+        if not machine.is_linux():
+            return '.'
+
+        # Canonical target: '<arch>-<system>', e.g. 'x86_64-linux'.
+        canonical_target = f'{machine.cpu_family}-{machine.system}'
+        rel_path = os.path.join(self.targets_dir, canonical_target)
+        abs_path = os.path.join(self.cuda_path, rel_path)
+
+        # AArch64 may need the SBSA fallback.
+        if machine.cpu_family == 'aarch64' and not os.path.exists(abs_path):
+            rel_path = os.path.join(self.targets_dir, f"sbsa-{machine.system}")
+            abs_path = os.path.join(self.cuda_path, rel_path)
+            mlog.debug(
+                f'Canonical CUDA target "{self.targets_dir}/{canonical_target}" missing; '
+                f'falling back to "{rel_path}".'
+            )
+
+        mlog.debug(f'CUDA target resolved to "{rel_path}".')
+
+        if not os.path.exists(abs_path):
+            mlog.error(f'CUDA target "{rel_path}" does not exist.')
+
+        return rel_path
 
     def _default_path_env_var(self) -> T.Optional[str]:
         env_vars = ['CUDA_PATH'] if self._is_windows() else ['CUDA_PATH', 'CUDA_HOME', 'CUDA_ROOT']
@@ -211,8 +251,8 @@ class CudaDependency(SystemDependency):
         return '.'.join(version.split('.')[:2])
 
     def _detect_arch_libdir(self) -> str:
-        arch = detect_cpu_family(self.env.coredata.compilers.host)
         machine = self.env.machines[self.for_machine]
+        arch = machine.cpu_family
         msg = '{} architecture is not supported in {} version of the CUDA Toolkit.'
         if machine.is_windows():
             libdirs = {'x86': 'Win32', 'x86_64': 'x64'}
@@ -220,10 +260,7 @@ class CudaDependency(SystemDependency):
                 raise DependencyException(msg.format(arch, 'Windows'))
             return os.path.join('lib', libdirs[arch])
         elif machine.is_linux():
-            libdirs = {'x86_64': 'lib64', 'ppc64': 'lib', 'aarch64': 'lib64', 'loongarch64': 'lib64'}
-            if arch not in libdirs:
-                raise DependencyException(msg.format(arch, 'Linux'))
-            return libdirs[arch]
+            return 'lib'
         elif machine.is_darwin():
             libdirs = {'x86_64': 'lib64'}
             if arch not in libdirs:
@@ -236,13 +273,14 @@ class CudaDependency(SystemDependency):
         all_found = True
 
         for module in self.requested_modules:
-            args = self.clib_compiler.find_library(module, self.env, [self.libdir])
-            if module == 'cudart_static' and self.language != 'cuda':
-                machine = self.env.machines[self.for_machine]
-                if machine.is_linux():
-                    # extracted by running
-                    #   nvcc -v foo.o
-                    args += ['-lrt', '-lpthread', '-ldl']
+            # You should only ever link to libraries inside the cuda tree, nothing outside of it.
+            # For instance, there is a
+            #
+            # - libnvidia-ml.so in stubs/ of the CUDA tree
+            # - libnvidia-ml.so in /usr/lib/ that is provided by the nvidia drivers
+            #
+            # Users should never link to the latter, since its ABI may change.
+            args = self.clib_compiler.find_library(module, [self.libdir, os.path.join(self.libdir, 'stubs')], self.libtype, ignore_system_dirs=True)
 
             if args is None:
                 self._report_dependency_error(f'Couldn\'t find requested CUDA module \'{module}\'')
@@ -276,31 +314,27 @@ class CudaDependency(SystemDependency):
     def log_info(self) -> str:
         return self.cuda_path if self.cuda_path else ''
 
-    def get_requested(self, kwargs: T.Dict[str, T.Any]) -> T.List[str]:
-        candidates = mesonlib.extract_as_list(kwargs, 'modules')
-        for c in candidates:
-            if not isinstance(c, str):
-                raise DependencyException('CUDA module argument is not a string.')
-        return candidates
-
     def get_link_args(self, language: T.Optional[str] = None, raw: bool = False) -> T.List[str]:
+        # when using nvcc to link, we should instead use the native driver options
+        REWRITE_MODULES = {
+            'cudart': ['-cudart', 'shared'],
+            'cudart_static': ['-cudart', 'static'],
+            'cudadevrt': ['-cudadevrt'],
+        }
+
         args: T.List[str] = []
         for lib in self.requested_modules:
             link_args = self.lib_modules[lib]
-            # Turn canonical arguments like
-            #   /opt/cuda/lib64/libcublas.so
-            # back into
-            #   -lcublas
-            # since this is how CUDA modules were passed to nvcc since time immemorial
-            if language == 'cuda':
-                if lib in frozenset(['cudart', 'cudart_static']):
-                    # nvcc always links these unconditionally
-                    mlog.debug(f'Not adding \'{lib}\' to dependency, since nvcc will link it implicitly')
-                    link_args = []
-                elif link_args and link_args[0].startswith(self.libdir):
-                    # module included with CUDA, nvcc knows how to find these itself
-                    mlog.debug(f'CUDA module \'{lib}\' found in CUDA libdir')
-                    link_args = ['-l' + lib]
+            if language == 'cuda' and lib in REWRITE_MODULES:
+                link_args = REWRITE_MODULES[lib]
+                mlog.debug(f'Rewriting module \'{lib}\' to \'{link_args}\'')
+            elif lib == 'cudart_static':
+                machine = self.env.machines[self.for_machine]
+                if machine.is_linux():
+                    # extracted by running
+                    #   nvcc -v foo.o
+                    link_args += ['-lrt', '-lpthread', '-ldl']
+
             args += link_args
 
         return args

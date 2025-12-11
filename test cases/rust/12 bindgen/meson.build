@@ -1,4 +1,4 @@
-# SPDX-license-identifer: Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright © 2021-2024 Intel Corporation
 
 project(
@@ -66,20 +66,7 @@ rust_bin = executable(
 test('main', rust_bin)
 
 # Test a generated header
-gen_h = custom_target(
-  'gen.h',
-  command : [find_program('src/gen_header.py'), '@INPUT@', '@OUTPUT@'],
-  output : 'gen.h',
-  input : 'src/header.h'
-)
-
-gen2_h = custom_target(
-  'other.h',
-  command : [find_program('src/gen_header.py'), '@INPUT@', '@OUTPUT@'],
-  output : 'other.h',
-  input : 'include/other.h'
-)
-
+subdir('gen')
 gen_rs = rust.bindgen(
   input : [gen_h, gen2_h],
   output : 'gen.rs',

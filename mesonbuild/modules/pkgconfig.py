@@ -38,6 +38,7 @@ if T.TYPE_CHECKING:
         filebase: T.Optional[str]
         description: T.Optional[str]
         url: str
+        license: str
         subdirs: T.List[str]
         conflicts: T.List[str]
         dataonly: bool
@@ -149,16 +150,30 @@ class DependenciesHelper:
                     self.add_version_reqs(obj.name, obj.version_reqs)
             elif isinstance(obj, str):
                 name, version_req = self.split_version_req(obj)
+                if name is None:
+                    continue
                 processed_reqs.append(name)
                 self.add_version_reqs(name, [version_req] if version_req is not None else None)
             elif isinstance(obj, dependencies.Dependency) and not obj.found():
                 pass
             elif isinstance(obj, dependencies.ExternalDependency) and obj.name == 'threads':
                 pass
+            elif isinstance(obj, dependencies.InternalDependency) and all(lib.get_id() in self.metadata for lib in obj.libraries):
+                FeatureNew.single_use('pkgconfig.generate requirement from internal dependency', '1.9.0',
+                                      self.state.subproject, location=self.state.current_node)
+                # Ensure BothLibraries are resolved:
+                if self.pub_libs and isinstance(self.pub_libs[0], build.StaticLibrary):
+                    obj = obj.get_as_static(recursive=True)
+                else:
+                    obj = obj.get_as_shared(recursive=True)
+                for lib in obj.libraries:
+                    processed_reqs.append(self.metadata[lib.get_id()].filebase)
             else:
                 raise mesonlib.MesonException('requires argument not a string, '
-                                              'library with pkgconfig-generated file '
-                                              f'or pkgconfig-dependency object, got {obj!r}')
+                                              'library with pkgconfig-generated file, '
+                                              'pkgconfig-dependency object, or '
+                                              'internal-dependency object with '
+                                              f'pkgconfig-generated file, got {obj!r}')
         return processed_reqs
 
     def add_cflags(self, cflags: T.List[str]) -> None:
@@ -285,12 +300,22 @@ class DependenciesHelper:
             # foo, bar' is ok, but 'foo,bar' is not.
             self.version_reqs[name].update(version_reqs)
 
-    def split_version_req(self, s: str) -> T.Tuple[str, T.Optional[str]]:
+    def split_version_req(self, s: str) -> T.Tuple[T.Optional[str], T.Optional[str]]:
+        stripped_str = s.strip()
+        if not stripped_str:
+            mlog.warning('Required dependency was found to be an empty string. Did you mean to pass an empty array?')
+            return None, None
         for op in ['>=', '<=', '!=', '==', '=', '>', '<']:
-            pos = s.find(op)
-            if pos > 0:
-                return s[0:pos].strip(), s[pos:].strip()
-        return s, None
+            pos = stripped_str.find(op)
+            if pos < 0:
+                continue
+            if pos == 0:
+                raise mesonlib.MesonException(f'required versioned dependency "{s}" is missing the dependency\'s name.')
+            stripped_str, version = stripped_str[0:pos].strip(), stripped_str[pos:].strip()
+            if not stripped_str:
+                raise mesonlib.MesonException(f'required versioned dependency "{s}" is missing the dependency\'s name.')
+            return stripped_str, version
+        return stripped_str, None
 
     def format_vreq(self, vreq: str) -> str:
         # vreq are '>=1.0' and pkgconfig wants '>= 1.0'
@@ -441,6 +466,7 @@ class PkgConfigModule(NewExtensionModule):
     def _generate_pkgconfig_file(self, state: ModuleState, deps: DependenciesHelper,
                                  subdirs: T.List[str], name: str,
                                  description: str, url: str, version: str,
+                                 license: str,
                                  pcfile: str, conflicts: T.List[str],
                                  variables: T.List[T.Tuple[str, str]],
                                  unescaped_variables: T.List[T.Tuple[str, str]],
@@ -519,18 +545,20 @@ class PkgConfigModule(NewExtensionModule):
                 ofile.write(f'{k}={v}\n')
             ofile.write('\n')
             ofile.write(f'Name: {name}\n')
-            if len(description) > 0:
+            if description:
                 ofile.write(f'Description: {description}\n')
-            if len(url) > 0:
+            if url:
                 ofile.write(f'URL: {url}\n')
+            if license:
+                ofile.write(f'License: {license}\n')
             ofile.write(f'Version: {version}\n')
             reqs_str = deps.format_reqs(deps.pub_reqs)
-            if len(reqs_str) > 0:
+            if reqs_str:
                 ofile.write(f'Requires: {reqs_str}\n')
             reqs_str = deps.format_reqs(deps.priv_reqs)
-            if len(reqs_str) > 0:
+            if reqs_str:
                 ofile.write(f'Requires.private: {reqs_str}\n')
-            if len(conflicts) > 0:
+            if conflicts:
                 ofile.write('Conflicts: {}\n'.format(' '.join(conflicts)))
 
             def generate_libs_flags(libs: T.List[LIBS]) -> T.Iterable[str]:
@@ -571,9 +599,9 @@ class PkgConfigModule(NewExtensionModule):
                         if isinstance(l, (build.CustomTarget, build.CustomTargetIndex)) or 'cs' not in l.compilers:
                             yield f'-l{lname}'
 
-            if len(deps.pub_libs) > 0:
+            if deps.pub_libs:
                 ofile.write('Libs: {}\n'.format(' '.join(generate_libs_flags(deps.pub_libs))))
-            if len(deps.priv_libs) > 0:
+            if deps.priv_libs:
                 ofile.write('Libs.private: {}\n'.format(' '.join(generate_libs_flags(deps.priv_libs))))
 
             cflags: T.List[str] = []
@@ -605,6 +633,7 @@ class PkgConfigModule(NewExtensionModule):
         KwargInfo('name', (str, NoneType), validator=lambda x: 'must not be an empty string' if x == '' else None),
         KwargInfo('subdirs', ContainerTypeInfo(list, str), default=[], listify=True),
         KwargInfo('url', str, default=''),
+        KwargInfo('license', str, default='', since='1.9.0'),
         KwargInfo('version', (str, NoneType)),
         VARIABLES_KW.evolve(name="unescaped_uninstalled_variables", since='0.59.0'),
         VARIABLES_KW.evolve(name="unescaped_variables", since='0.59.0'),
@@ -659,6 +688,7 @@ class PkgConfigModule(NewExtensionModule):
         filebase = kwargs['filebase'] if kwargs['filebase'] is not None else name
         description = kwargs['description'] if kwargs['description'] is not None else default_description
         url = kwargs['url']
+        license = kwargs['license']
         conflicts = kwargs['conflicts']
 
         # Prepend the main library to public libraries list. This is required
@@ -713,7 +743,7 @@ class PkgConfigModule(NewExtensionModule):
                 pkgroot_name = os.path.join('{libdir}', 'pkgconfig')
         relocatable = state.get_option('pkgconfig.relocatable')
         self._generate_pkgconfig_file(state, deps, subdirs, name, description, url,
-                                      version, pcfile, conflicts, variables,
+                                      version, license, pcfile, conflicts, variables,
                                       unescaped_variables, False, dataonly,
                                       pkgroot=pkgroot if relocatable else None)
         res = build.Data([mesonlib.File(True, state.environment.get_scratch_dir(), pcfile)], pkgroot, pkgroot_name, None, state.subproject, install_tag='devel')
@@ -722,7 +752,7 @@ class PkgConfigModule(NewExtensionModule):
 
         pcfile = filebase + '-uninstalled.pc'
         self._generate_pkgconfig_file(state, deps, subdirs, name, description, url,
-                                      version, pcfile, conflicts, variables,
+                                      version, license, pcfile, conflicts, variables,
                                       unescaped_variables, uninstalled=True, dataonly=dataonly)
         # Associate the main library with this generated pc file. If the library
         # is used in any subsequent call to the generated, it will generate a

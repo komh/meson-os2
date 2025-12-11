@@ -41,8 +41,8 @@ class ModuleState:
         self.root_subdir = interpreter.root_subdir
         self.current_lineno = interpreter.current_node.lineno
         self.environment = interpreter.environment
-        self.project_name = interpreter.build.project_name
-        self.project_version = interpreter.build.dep_manifest[interpreter.active_projectname].version
+        self.project_name = interpreter.active_projectname
+        self.project_version = interpreter.project_version
         # The backend object is under-used right now, but we will need it:
         # https://github.com/mesonbuild/meson/issues/1419
         self.backend = interpreter.backend
@@ -75,14 +75,14 @@ class ModuleState:
                      required: bool = True,
                      version_func: T.Optional[ProgramVersionFunc] = None,
                      wanted: T.Union[str, T.List[str]] = '', silent: bool = False,
-                     for_machine: MachineChoice = MachineChoice.HOST) -> T.Union[ExternalProgram, build.Executable, OverrideProgram]:
+                     for_machine: MachineChoice = MachineChoice.HOST) -> T.Union[ExternalProgram, build.OverrideExecutable, OverrideProgram]:
         if not isinstance(prog, list):
             prog = [prog]
         return self._interpreter.find_program_impl(prog, required=required, version_func=version_func,
                                                    wanted=wanted, silent=silent, for_machine=for_machine)
 
     def find_tool(self, name: str, depname: str, varname: str, required: bool = True,
-                  wanted: T.Optional[str] = None) -> T.Union['build.Executable', ExternalProgram, 'OverrideProgram']:
+                  wanted: T.Optional[str] = None) -> T.Union[build.OverrideExecutable, ExternalProgram, 'OverrideProgram']:
         # Look in overrides in case it's built as subproject
         progobj = self._interpreter.program_from_overrides([name], [])
         if progobj is not None:
