@@ -19,14 +19,14 @@ import typing as T
 
 Info = T.TypeVar("Info")
 
-async def run_with_buffered_output(cmdlist: T.List[str]) -> int:
+async def run_with_buffered_output(cmdlist: T.List[str], env: T.Optional[T.Dict[str, str]] = None) -> int:
     """Run the command in cmdlist, buffering the output so that it is
        not mixed for multiple child processes.  Kill the child on
        cancellation."""
     quoted_cmdline = join_args(cmdlist)
     p: T.Optional[asyncio.subprocess.Process] = None
     try:
-        p = await asyncio.create_subprocess_exec(*cmdlist,
+        p = await asyncio.create_subprocess_exec(*cmdlist, env=env,
                                                  stdin=asyncio.subprocess.DEVNULL,
                                                  stdout=asyncio.subprocess.PIPE,
                                                  stderr=asyncio.subprocess.STDOUT)
@@ -98,7 +98,7 @@ def parse_pattern_file(fname: Path) -> T.List[str]:
 
 def all_clike_files(name: str, srcdir: Path, builddir: Path) -> T.Iterable[Path]:
     patterns = parse_pattern_file(srcdir / f'.{name}-include')
-    globs: T.Union[T.List[T.List[Path]], T.List[T.Generator[Path, None, None]]]
+    globs: T.Sequence[T.Union[T.List[Path], T.Iterator[Path], T.Generator[Path, None, None]]]
     if patterns:
         globs = [srcdir.glob(p) for p in patterns]
     else:
@@ -121,16 +121,36 @@ def all_clike_files(name: str, srcdir: Path, builddir: Path) -> T.Iterable[Path]
         yield f
 
 def run_clang_tool(name: str, srcdir: Path, builddir: Path, fn: T.Callable[..., T.Coroutine[None, None, int]], *args: T.Any) -> int:
-    if sys.platform == 'win32':
+    if sys.platform == 'win32' and sys.version_info < (3, 8):
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
     def wrapper(path: Path) -> T.Iterable[T.Coroutine[None, None, int]]:
         yield fn(path, *args)
     return asyncio.run(_run_workers(all_clike_files(name, srcdir, builddir), wrapper))
 
+def run_clang_tool_on_sources(name: str, srcdir: Path, builddir: Path, fn: T.Callable[..., T.Coroutine[None, None, int]], *args: T.Any) -> int:
+    if sys.platform == 'win32' and sys.version_info < (3, 8):
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+    source_files = set()
+    with open('meson-info/intro-targets.json', encoding='utf-8') as fp:
+        targets = json.load(fp)
+
+        for target in targets:
+            for target_source in target.get('target_sources') or []:
+                for source in target_source.get('sources') or []:
+                    source_files.add(Path(source))
+
+    clike_files = set(all_clike_files(name, srcdir, builddir))
+    source_files = source_files.intersection(clike_files)
+
+    def wrapper(path: Path) -> T.Iterable[T.Coroutine[None, None, int]]:
+        yield fn(path, *args)
+    return asyncio.run(_run_workers(source_files, wrapper))
+
 def run_tool_on_targets(fn: T.Callable[[T.Dict[str, T.Any]],
                                        T.Iterable[T.Coroutine[None, None, int]]]) -> int:
-    if sys.platform == 'win32':
+    if sys.platform == 'win32' and sys.version_info < (3, 8):
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
     with open('meson-info/intro-targets.json', encoding='utf-8') as fp:

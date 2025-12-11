@@ -34,7 +34,7 @@ if T.TYPE_CHECKING:
 
     from .._typing import ImmutableListProtocol
     from ..build import ConfigurationData
-    from ..coredata import StrOrBytesPath
+    from ..cmdline import StrOrBytesPath
     from ..environment import Environment
     from ..compilers.compilers import Compiler
     from ..interpreterbase.baseobjects import SubProject
@@ -108,6 +108,7 @@ __all__ = [
     'get_compiler_for_source',
     'get_filenames_templates_dict',
     'get_rsp_threshold',
+    'get_subproject_dir',
     'get_variable_regex',
     'get_wine_shortpath',
     'git',
@@ -152,9 +153,11 @@ __all__ = [
     'set_meson_command',
     'split_args',
     'stringlistify',
+    'underscorify',
     'substitute_values',
     'substring_is_in_list',
     'typeslistify',
+    'unique_list',
     'verbose_git',
     'version_compare',
     'version_compare_condition_with_min',
@@ -434,7 +437,7 @@ class File(HoldableObject):
         absdir = srcdir
         if self.is_built:
             absdir = builddir
-        return os.path.join(absdir, self.relative_name())
+        return os.path.normpath(os.path.join(absdir, self.relative_name()))
 
     @property
     def suffix(self) -> str:
@@ -761,6 +764,20 @@ class VcsData:
     rev_regex: str
     dep: str
     wc_dir: T.Optional[str] = None
+    repo_can_be_file: bool = False
+
+    def repo_exists(self, curdir: Path) -> bool:
+        if not shutil.which(self.cmd):
+            return False
+
+        repo = curdir / self.repo_dir
+        if repo.is_dir():
+            return True
+        if repo.is_file() and self.repo_can_be_file:
+            return True
+
+        return False
+
 
 def detect_vcs(source_dir: T.Union[str, Path]) -> T.Optional[VcsData]:
     vcs_systems = [
@@ -771,6 +788,7 @@ def detect_vcs(source_dir: T.Union[str, Path]) -> T.Optional[VcsData]:
             get_rev = ['git', 'describe', '--dirty=+', '--always'],
             rev_regex = '(.*)',
             dep = '.git/logs/HEAD',
+            repo_can_be_file=True,
         ),
         VcsData(
             name = 'mercurial',
@@ -806,9 +824,7 @@ def detect_vcs(source_dir: T.Union[str, Path]) -> T.Optional[VcsData]:
     parent_paths_and_self.appendleft(source_dir)
     for curdir in parent_paths_and_self:
         for vcs in vcs_systems:
-            repodir = vcs.repo_dir
-            cmd = vcs.cmd
-            if curdir.joinpath(repodir).is_dir() and shutil.which(cmd):
+            if vcs.repo_exists(curdir):
                 vcs.wc_dir = str(curdir)
                 return vcs
     return None
@@ -1231,7 +1247,7 @@ def do_replacement(regex: T.Pattern[str], line: str,
     if variable_format == 'meson':
         return do_replacement_meson(regex, line, confdata)
     elif variable_format in {'cmake', 'cmake@'}:
-        return do_replacement_cmake(regex, line, variable_format == 'cmake@', confdata)
+        return do_replacement_cmake(line, variable_format == 'cmake@', confdata)
     else:
         raise MesonException('Invalid variable format')
 
@@ -1256,6 +1272,9 @@ def do_replacement_meson(regex: T.Pattern[str], line: str,
                 if isinstance(var, str):
                     var_str = var
                 elif isinstance(var, int):
+                    if isinstance(var, bool):
+                        msg = f'Variable substitution with boolean value {varname!r} is deprecated.'
+                        mlog.deprecation(msg)
                     var_str = str(var)
                 else:
                     msg = f'Tried to replace variable {varname!r} value with ' \
@@ -1266,44 +1285,92 @@ def do_replacement_meson(regex: T.Pattern[str], line: str,
             return var_str
     return re.sub(regex, variable_replace, line), missing_variables
 
-def do_replacement_cmake(regex: T.Pattern[str], line: str, at_only: bool,
+def do_replacement_cmake(line: str, at_only: bool,
                          confdata: T.Union[T.Dict[str, T.Tuple[str, T.Optional[str]]], 'ConfigurationData']) -> T.Tuple[str, T.Set[str]]:
     missing_variables: T.Set[str] = set()
 
-    def variable_replace(match: T.Match[str]) -> str:
-        # Pairs of escape characters before '@', '\@', '${' or '\${'
-        if match.group(0).endswith('\\'):
-            num_escapes = match.end(0) - match.start(0)
-            return '\\' * (num_escapes // 2)
-        # Handle cmake escaped \${} tags
-        elif not at_only and match.group(0) == '\\${':
-            return '${'
-        # \@escaped\@ variables
-        elif match.groupdict().get('escaped') is not None:
-            return match.group('escaped')[1:-2]+'@'
-        else:
-            # Template variable to be replaced
-            varname = match.group('variable')
-            if not varname:
-                varname = match.group('cmake_variable')
+    character_regex = re.compile(r'''
+        [^a-zA-Z0-9_/.+\-]
+    ''', re.VERBOSE)
 
-            var_str = ''
-            if varname in confdata:
-                var, _ = confdata.get(varname)
-                if isinstance(var, str):
-                    var_str = var
-                elif isinstance(var, bool):
-                    var_str = str(int(var))
-                elif isinstance(var, int):
-                    var_str = str(var)
-                else:
-                    msg = f'Tried to replace variable {varname!r} value with ' \
-                          f'something other than a string or int: {var!r}'
-                    raise MesonException(msg)
+    def variable_get(varname: str) -> str:
+        var_str = ''
+        if varname in confdata:
+            var, _ = confdata.get(varname)
+            if isinstance(var, str):
+                var_str = var
+            elif isinstance(var, bool):
+                var_str = str(int(var))
+            elif isinstance(var, int):
+                var_str = str(var)
             else:
-                missing_variables.add(varname)
-            return var_str
-    return re.sub(regex, variable_replace, line), missing_variables
+                msg = f'Tried to replace variable {varname!r} value with ' \
+                      f'something other than a string or int: {var!r}'
+                raise MesonException(msg)
+        else:
+            missing_variables.add(varname)
+        return var_str
+
+    def parse_line(line: str) -> str:
+        index = 0
+        while len(line) > index:
+            if line[index] == '@':
+                next_at = line.find("@", index+1)
+                if next_at > index+1:
+                    varname = line[index+1:next_at]
+                    match = character_regex.search(varname)
+
+                    # at substituion doesn't occur if they key isn't valid
+                    # however it also doesn't raise an error
+                    if not match:
+                        value = variable_get(varname)
+                        line = line[:index] + value + line[next_at+1:]
+
+            elif not at_only and line[index:index+2] == '${':
+                bracket_count = 1
+                end_bracket = index + 2
+                try:
+                    while bracket_count > 0:
+                        if line[end_bracket:end_bracket+2] == "${":
+                            end_bracket += 2
+                            bracket_count += 1
+                        elif line[end_bracket] == "}":
+                            end_bracket += 1
+                            bracket_count -= 1
+                        elif line[end_bracket] in {"@", "\n"}:
+                            # these aren't valid variable characters
+                            # but they are inconsequential at this point
+                            end_bracket += 1
+                        elif character_regex.search(line[end_bracket]):
+                            invalid_character = line[end_bracket]
+                            variable = line[index+2:end_bracket]
+                            msg = f'Found invalid character {invalid_character!r}' \
+                                  f' in variable {variable!r}'
+                            raise MesonException(msg)
+                        else:
+                            end_bracket += 1
+                except IndexError:
+                    msg = f'Found incomplete variable {line[index:-1]!r}'
+                    raise MesonException(msg)
+
+                if bracket_count == 0:
+                    varname = parse_line(line[index+2:end_bracket-1])
+                    match = character_regex.search(varname)
+                    if match:
+                        invalid_character = line[end_bracket-2]
+                        variable = line[index+2:end_bracket-3]
+                        msg = f'Found invalid character {invalid_character!r}' \
+                              f' in variable {variable!r}'
+                        raise MesonException(msg)
+
+                    value = variable_get(varname)
+                    line = line[:index] + value + line[end_bracket:]
+
+            index += 1
+
+        return line
+
+    return parse_line(line), missing_variables
 
 def do_define_meson(regex: T.Pattern[str], line: str, confdata: 'ConfigurationData',
                     subproject: T.Optional[SubProject] = None) -> str:
@@ -1332,12 +1399,12 @@ def do_define_meson(regex: T.Pattern[str], line: str, confdata: 'ConfigurationDa
     else:
         raise MesonException('#mesondefine argument "%s" is of unknown type.' % varname)
 
-def do_define_cmake(regex: T.Pattern[str], line: str, confdata: 'ConfigurationData', at_only: bool,
+def do_define_cmake(line: str, confdata: 'ConfigurationData', at_only: bool,
                     subproject: T.Optional[SubProject] = None) -> str:
     cmake_bool_define = 'cmakedefine01' in line
 
     def get_cmake_define(line: str, confdata: 'ConfigurationData') -> str:
-        arr = line.split()
+        arr = line[1:].split()
 
         if cmake_bool_define:
             (v, desc) = confdata.get(arr[1])
@@ -1352,7 +1419,7 @@ def do_define_cmake(regex: T.Pattern[str], line: str, confdata: 'ConfigurationDa
                 define_value += [token]
         return ' '.join(define_value)
 
-    arr = line.split()
+    arr = line[1:].split()
 
     if len(arr) != 2 and subproject is not None:
         from ..interpreterbase.decorators import FeatureNew
@@ -1372,12 +1439,12 @@ def do_define_cmake(regex: T.Pattern[str], line: str, confdata: 'ConfigurationDa
 
     result = get_cmake_define(line, confdata)
     result = f'#define {varname} {result}'.strip() + '\n'
-    result, _ = do_replacement_cmake(regex, result, at_only, confdata)
+    result, _ = do_replacement_cmake(result, at_only, confdata)
     return result
 
 def get_variable_regex(variable_format: Literal['meson', 'cmake', 'cmake@'] = 'meson') -> T.Pattern[str]:
     # Only allow (a-z, A-Z, 0-9, _, -) as valid characters for a define
-    if variable_format in {'meson', 'cmake@'}:
+    if variable_format == 'meson':
         # Also allow escaping pairs of '@' with '\@'
         regex = re.compile(r'''
             (?:\\\\)+(?=\\?@)  # Matches multiple backslashes followed by an @ symbol
@@ -1386,17 +1453,13 @@ def get_variable_regex(variable_format: Literal['meson', 'cmake', 'cmake@'] = 'm
             |                  # OR
             (?P<escaped>\\@[-a-zA-Z0-9_]+\\@)  # Match an escaped variable enclosed in @ symbols
         ''', re.VERBOSE)
-    else:
+    elif variable_format == 'cmake@':
         regex = re.compile(r'''
-            (?:\\\\)+(?=\\?(\$|@))  # Match multiple backslashes followed by a dollar sign or an @ symbol
-            |                  # OR
-            \\\${              # Match a backslash followed by a dollar sign and an opening curly brace
-            |                  # OR
-            \${(?P<cmake_variable>[-a-zA-Z0-9_]+)}  # Match a variable enclosed in curly braces and capture the variable name
-            |                  # OR
             (?<!\\)@(?P<variable>[-a-zA-Z0-9_]+)@  # Match a variable enclosed in @ symbols and capture the variable name; no matches beginning with '\@'
-            |                  # OR
-            (?P<escaped>\\@[-a-zA-Z0-9_]+\\@)  # Match an escaped variable enclosed in @ symbols
+        ''', re.VERBOSE)
+    elif variable_format == "cmake":
+        regex = re.compile(r'''
+            \${(?P<variable>[-a-zA-Z0-9_]*)}  # Match a variable enclosed in curly braces and capture the variable name
         ''', re.VERBOSE)
     return regex
 
@@ -1444,9 +1507,7 @@ def do_conf_str_cmake(src: str, data: T.List[str], confdata: 'ConfigurationData'
     if at_only:
         variable_format = 'cmake@'
 
-    regex = get_variable_regex(variable_format)
-
-    search_token = '#cmakedefine'
+    search_token = 'cmakedefine'
 
     result: T.List[str] = []
     missing_variables: T.Set[str] = set()
@@ -1454,13 +1515,15 @@ def do_conf_str_cmake(src: str, data: T.List[str], confdata: 'ConfigurationData'
     # during substitution so we can warn the user to use the `copy:` kwarg.
     confdata_useless = not confdata.keys()
     for line in data:
-        if line.lstrip().startswith(search_token):
+        stripped_line = line.lstrip()
+        if len(stripped_line) >= 2 and stripped_line[0] == '#' and stripped_line[1:].lstrip().startswith(search_token):
             confdata_useless = False
-            line = do_define_cmake(regex, line, confdata, at_only, subproject)
+
+            line = do_define_cmake(line, confdata, at_only, subproject)
         else:
             if '#mesondefine' in line:
                 raise MesonException(f'Format error in {src}: saw "{line.strip()}" when format set to "{variable_format}"')
-            line, missing = do_replacement_cmake(regex, line, at_only, confdata)
+            line, missing = do_replacement_cmake(line, at_only, confdata)
             missing_variables.update(missing)
             if missing:
                 confdata_useless = False
@@ -1634,6 +1697,8 @@ def typeslistify(item: 'T.Union[_T, T.Sequence[_T]]',
 def stringlistify(item: T.Union[T.Any, T.Sequence[T.Any]]) -> T.List[str]:
     return typeslistify(item, str)
 
+def underscorify(item: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9]', '_', item)
 
 def expand_arguments(args: T.Iterable[str]) -> T.Optional[T.List[str]]:
     expended_args: T.List[str] = []
@@ -2008,6 +2073,8 @@ def detect_subprojects(spdir_name: str, current_dir: str = '',
             continue
         append_this = True
         if os.path.isdir(trial):
+            spdir_name = get_subproject_dir(trial) or 'subprojects'
+
             detect_subprojects(spdir_name, trial, result)
         elif trial.endswith('.wrap') and os.path.isfile(trial):
             basename = os.path.splitext(basename)[0]
@@ -2026,6 +2093,10 @@ def substring_is_in_list(substr: str, strlist: T.List[str]) -> bool:
         if substr in s:
             return True
     return False
+
+
+def unique_list(x: T.Iterable[_T]) -> T.List[_T]:
+    return list(dict.fromkeys(x))
 
 
 class OrderedSet(T.MutableSet[_T]):
@@ -2172,7 +2243,7 @@ _BUILTIN_NAMES = {
     'pkg_config_path',
     'cmake_prefix_path',
     'vsenv',
-    'emxomf',
+    'os2_emxomf',
 }
 
 
@@ -2442,3 +2513,23 @@ class lazy_property(T.Generic[_T]):
         value = self.__func(instance)
         setattr(instance, self.__name, value)
         return value
+
+
+def get_subproject_dir(directory: str = '.') -> T.Optional[str]:
+    """Get the name of the subproject directory for a specific project.
+
+    If the subproject does not have a meson.build file, it is called in an
+    invalid directory, it returns None
+
+    :param directory: Where to search, defaults to current working directory
+    :return: the name of the subproject directory or None.
+    """
+    from ..ast import IntrospectionInterpreter
+    from ..interpreterbase.exceptions import InvalidArguments
+    intr = IntrospectionInterpreter(directory, '', 'none')
+    try:
+        intr.load_root_meson_file()
+    except InvalidArguments: # Root meson file cannot be found
+        return None
+
+    return intr.extract_subproject_dir() or 'subprojects'

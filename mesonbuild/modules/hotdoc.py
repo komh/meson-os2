@@ -14,7 +14,7 @@ from ..build import CustomTarget, CustomTargetIndex
 from ..dependencies import Dependency, InternalDependency
 from ..interpreterbase import (
     InvalidArguments, noPosargs, noKwargs, typed_kwargs, FeatureDeprecated,
-    ContainerTypeInfo, KwargInfo, typed_pos_args
+    ContainerTypeInfo, KwargInfo, typed_pos_args, InterpreterObject
 )
 from ..interpreter.interpreterobjects import _CustomTargetHolder
 from ..interpreter.type_checking import NoneType
@@ -145,31 +145,6 @@ class HotdocTargetBuilder:
             option = "--" + arg.replace("_", "-")
             self.check_extra_arg_type(arg, value)
             self.set_arg_value(option, value)
-
-    def get_value(self, types, argname, default=None, value_processor=None,
-                  mandatory=False, force_list=False):
-        if not isinstance(types, list):
-            types = [types]
-        try:
-            uvalue = value = self.kwargs.pop(argname)
-            if value_processor:
-                value = value_processor(value)
-
-            for t in types:
-                if isinstance(value, t):
-                    if force_list and not isinstance(value, list):
-                        return [value], uvalue
-                    return value, uvalue
-            raise MesonException(f"{argname} field value {value} is not valid,"
-                                 f" valid types are {types}")
-        except KeyError:
-            if mandatory:
-                raise MesonException(f"{argname} mandatory field not found")
-
-            if default is not None:
-                return default, default
-
-        return None, None
 
     def add_extension_paths(self, paths: T.Union[T.List[str], T.Set[str]]) -> None:
         for path in paths:
@@ -383,12 +358,9 @@ class HotdocTargetBuilder:
 
 
 class HotdocTargetHolder(_CustomTargetHolder['HotdocTarget']):
-    def __init__(self, target: HotdocTarget, interp: Interpreter):
-        super().__init__(target, interp)
-        self.methods.update({'config_path': self.config_path_method})
-
     @noPosargs
     @noKwargs
+    @InterpreterObject.method('config_path')
     def config_path_method(self, *args: T.Any, **kwargs: T.Any) -> str:
         conf = self.held_object.hotdoc_conf.absolute_path(self.interpreter.environment.source_dir,
                                                           self.interpreter.environment.build_dir)

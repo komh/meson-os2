@@ -28,11 +28,10 @@ from .. import coredata
 
 if T.TYPE_CHECKING:
     from ..arglist import CompilerArgs
-    from ..interpreter import Interpreter
 
     Project = T.Tuple[str, Path, str, MachineChoice]
 
-def autodetect_vs_version(build: T.Optional[build.Build], interpreter: T.Optional[Interpreter]) -> backends.Backend:
+def autodetect_vs_version(build: T.Optional[build.Build]) -> backends.Backend:
     vs_version = os.getenv('VisualStudioVersion', None)
     vs_install_dir = os.getenv('VSINSTALLDIR', None)
     if not vs_install_dir:
@@ -42,27 +41,31 @@ def autodetect_vs_version(build: T.Optional[build.Build], interpreter: T.Optiona
     # vcvarsall.bat doesn't set it, so also use VSINSTALLDIR
     if vs_version == '11.0' or 'Visual Studio 11' in vs_install_dir:
         from mesonbuild.backend.vs2012backend import Vs2012Backend
-        return Vs2012Backend(build, interpreter)
+        return Vs2012Backend(build)
     if vs_version == '12.0' or 'Visual Studio 12' in vs_install_dir:
         from mesonbuild.backend.vs2013backend import Vs2013Backend
-        return Vs2013Backend(build, interpreter)
+        return Vs2013Backend(build)
     if vs_version == '14.0' or 'Visual Studio 14' in vs_install_dir:
         from mesonbuild.backend.vs2015backend import Vs2015Backend
-        return Vs2015Backend(build, interpreter)
+        return Vs2015Backend(build)
     if vs_version == '15.0' or 'Visual Studio 17' in vs_install_dir or \
        'Visual Studio\\2017' in vs_install_dir:
         from mesonbuild.backend.vs2017backend import Vs2017Backend
-        return Vs2017Backend(build, interpreter)
+        return Vs2017Backend(build)
     if vs_version == '16.0' or 'Visual Studio 19' in vs_install_dir or \
        'Visual Studio\\2019' in vs_install_dir:
         from mesonbuild.backend.vs2019backend import Vs2019Backend
-        return Vs2019Backend(build, interpreter)
+        return Vs2019Backend(build)
     if vs_version == '17.0' or 'Visual Studio 22' in vs_install_dir or \
        'Visual Studio\\2022' in vs_install_dir:
         from mesonbuild.backend.vs2022backend import Vs2022Backend
-        return Vs2022Backend(build, interpreter)
+        return Vs2022Backend(build)
+    if vs_version == '18.0' or 'Visual Studio 26' in vs_install_dir or \
+       'Visual Studio\\2026' in vs_install_dir:
+        from mesonbuild.backend.vs2026backend import Vs2026Backend
+        return Vs2026Backend(build)
     if 'Visual Studio 10.0' in vs_install_dir:
-        return Vs2010Backend(build, interpreter)
+        return Vs2010Backend(build)
     raise MesonException('Could not detect Visual Studio using VisualStudioVersion: {!r} or VSINSTALLDIR: {!r}!\n'
                          'Please specify the exact backend to use.'.format(vs_version, vs_install_dir))
 
@@ -135,8 +138,8 @@ class Vs2010Backend(backends.Backend):
 
     name = 'vs2010'
 
-    def __init__(self, build: T.Optional[build.Build], interpreter: T.Optional[Interpreter], gen_lite: bool = False):
-        super().__init__(build, interpreter)
+    def __init__(self, build: T.Optional[build.Build], gen_lite: bool = False):
+        super().__init__(build)
         self.project_file_version = '10.0.30319.1'
         self.sln_file_version = '11.00'
         self.sln_version_comment = '2010'
@@ -153,7 +156,7 @@ class Vs2010Backend(backends.Backend):
     def get_target_private_dir(self, target):
         return os.path.join(self.get_target_dir(target), target.get_id())
 
-    def generate_genlist_for_target(self, genlist: T.Union[build.GeneratedList, build.CustomTarget, build.CustomTargetIndex], target: build.BuildTarget, parent_node: ET.Element, generator_output_files: T.List[str], custom_target_include_dirs: T.List[str], custom_target_output_files: T.List[str]) -> None:
+    def generate_genlist_for_target(self, genlist: build.GeneratedTypes, target: build.BuildTarget, parent_node: ET.Element, generator_output_files: T.List[str], custom_target_include_dirs: T.List[str], custom_target_output_files: T.List[str]) -> None:
         if isinstance(genlist, build.GeneratedList):
             for x in genlist.depends:
                 self.generate_genlist_for_target(x, target, parent_node, [], [], [])
@@ -330,7 +333,7 @@ class Vs2010Backend(backends.Backend):
                 result[o.target.get_id()] = o.target
         return result.items()
 
-    def get_target_deps(self, t: T.Dict[T.Any, T.Union[build.Target, build.CustomTargetIndex]], recursive=False):
+    def get_target_deps(self, t: T.Dict[T.Any, build.AnyTargetType], recursive=False):
         all_deps: T.Dict[str, build.Target] = {}
         for target in t.values():
             if isinstance(target, build.CustomTargetIndex):
@@ -417,7 +420,8 @@ class Vs2010Backend(backends.Backend):
 
     def generate_solution(self, sln_filename: str, projlist: T.List[Project]) -> None:
         default_projlist = self.get_build_by_default_targets()
-        default_projlist.update(self.get_testlike_targets())
+        for t in self.get_testlike_targets():
+            default_projlist[t.get_id()] = t
         sln_filename_tmp = sln_filename + '~'
         # Note using the utf-8 BOM requires the blank line, otherwise Visual Studio Version Selector fails.
         # Without the BOM, VSVS fails if there is a blank line.
@@ -538,7 +542,7 @@ class Vs2010Backend(backends.Backend):
         replace_if_different(sln_filename, sln_filename_tmp)
 
     def generate_projects(self, vslite_ctx: dict = None) -> T.List[Project]:
-        startup_project = self.environment.coredata.optstore.get_value('backend_startup_project')
+        startup_project = self.environment.coredata.optstore.get_value_for('backend_startup_project')
         projlist: T.List[Project] = []
         startup_idx = 0
         for (i, (name, target)) in enumerate(self.build.targets.items()):
@@ -570,16 +574,16 @@ class Vs2010Backend(backends.Backend):
         objects = []
         languages = []
         for i in srclist:
-            if self.environment.is_header(i):
+            if compilers.is_header(i):
                 headers.append(i)
-            elif self.environment.is_object(i):
+            elif compilers.is_object(i):
                 objects.append(i)
-            elif self.environment.is_source(i):
+            elif compilers.is_source(i):
                 sources.append(i)
                 lang = self.lang_from_source_file(i)
                 if lang not in languages:
                     languages.append(lang)
-            elif self.environment.is_library(i):
+            elif compilers.is_library(i):
                 pass
             else:
                 # Everything that is not an object or source file is considered a header.
@@ -623,7 +627,8 @@ class Vs2010Backend(backends.Backend):
                              conftype='Utility',
                              target_ext=None,
                              target_platform=None,
-                             gen_manifest=True) -> T.Tuple[ET.Element, ET.Element]:
+                             gen_manifest=True,
+                             masm_type: T.Optional[T.Literal['masm', 'marmasm']] = None) -> T.Tuple[ET.Element, ET.Element]:
         root = ET.Element('Project', {'DefaultTargets': "Build",
                                       'ToolsVersion': '4.0',
                                       'xmlns': 'http://schemas.microsoft.com/developer/msbuild/2003'})
@@ -661,6 +666,13 @@ class Vs2010Backend(backends.Backend):
         #   "The build tools for v142 (Platform Toolset = 'v142') cannot be found. ... please install v142 build tools."
         # This is extremely unhelpful and misleading since the v14x build tools ARE installed.
         ET.SubElement(root, 'Import', Project=r'$(VCTargetsPath)\Microsoft.Cpp.props')
+        ext_settings_grp = ET.SubElement(root, 'ImportGroup', Label='ExtensionSettings')
+        if masm_type:
+            ET.SubElement(
+                ext_settings_grp,
+                'Import',
+                Project=rf'$(VCTargetsPath)\BuildCustomizations\{masm_type}.props',
+            )
 
         # This attribute makes sure project names are displayed as expected in solution files even when their project file names differ
         pname = ET.SubElement(globalgroup, 'ProjectName')
@@ -696,7 +708,10 @@ class Vs2010Backend(backends.Backend):
             if target_ext:
                 ET.SubElement(direlem, 'TargetExt').text = target_ext
 
-            ET.SubElement(direlem, 'EmbedManifest').text = 'true' if gen_manifest == 'embed' else 'false'
+            # Fix weird mt.exe error:
+            # mt.exe is trying to compile a non-existent .generated.manifest file and link it
+            # with the target. This does not happen without masm props.
+            ET.SubElement(direlem, 'EmbedManifest').text = 'true' if masm_type or gen_manifest == 'embed' else 'false'
             ET.SubElement(direlem, 'GenerateManifest').text = 'true' if gen_manifest else 'false'
 
         return (root, type_config)
@@ -778,12 +793,19 @@ class Vs2010Backend(backends.Backend):
             platform = self.build_platform
         else:
             platform = self.platform
+
+        masm = self.get_masm_type(target)
+
         (root, type_config) = self.create_basic_project(target.name,
                                                         temp_dir=target.get_id(),
                                                         guid=guid,
                                                         target_platform=platform,
-                                                        gen_manifest=self.get_gen_manifest(target))
+                                                        gen_manifest=self.get_gen_manifest(target),
+                                                        masm_type=masm)
         ET.SubElement(root, 'Import', Project=r'$(VCTargetsPath)\Microsoft.Cpp.targets')
+        ext_tgt_grp = ET.SubElement(root, 'ImportGroup', Label='ExtensionTargets')
+        if masm:
+            ET.SubElement(ext_tgt_grp, 'Import', Project=rf'$(VCTargetsPath)\BuildCustomizations\{masm}.targets')
         target.generated = [self.compile_target_to_generator(target)]
         target.sources = []
         self.generate_custom_generator_commands(target, root)
@@ -798,25 +820,31 @@ class Vs2010Backend(backends.Backend):
             return 'c'
         if ext in compilers.cpp_suffixes:
             return 'cpp'
+        if ext in compilers.lang_suffixes['masm']:
+            return 'masm'
         raise MesonException(f'Could not guess language from source file {src}.')
 
-    def add_pch(self, pch_sources, lang, inc_cl):
+    def add_pch(self, pch_sources: T.Dict[str, T.Tuple[str, T.Optional[str], str, T.Optional[str]]],
+                lang, inc_cl) -> None:
         if lang in pch_sources:
             self.use_pch(pch_sources, lang, inc_cl)
 
-    def create_pch(self, pch_sources, lang, inc_cl):
+    def create_pch(self, pch_sources: T.Dict[str, T.Tuple[str, T.Optional[str], str, T.Optional[str]]],
+                   lang, inc_cl) -> None:
         pch = ET.SubElement(inc_cl, 'PrecompiledHeader')
         pch.text = 'Create'
         self.add_pch_files(pch_sources, lang, inc_cl)
 
-    def use_pch(self, pch_sources, lang, inc_cl):
+    def use_pch(self, pch_sources: T.Dict[str, T.Tuple[str, T.Optional[str], str, T.Optional[str]]],
+                lang, inc_cl) -> None:
         pch = ET.SubElement(inc_cl, 'PrecompiledHeader')
         pch.text = 'Use'
         header = self.add_pch_files(pch_sources, lang, inc_cl)
         pch_include = ET.SubElement(inc_cl, 'ForcedIncludeFiles')
         pch_include.text = header + ';%(ForcedIncludeFiles)'
 
-    def add_pch_files(self, pch_sources, lang, inc_cl):
+    def add_pch_files(self, pch_sources: T.Dict[str, T.Tuple[str, T.Optional[str], str, T.Optional[str]]],
+                      lang, inc_cl) -> str:
         header = os.path.basename(pch_sources[lang][0])
         pch_file = ET.SubElement(inc_cl, 'PrecompiledHeaderFile')
         # When USING PCHs, MSVC will not do the regular include
@@ -844,6 +872,8 @@ class Vs2010Backend(backends.Backend):
         # they are not used twice.
         # FIXME add args as needed.
         if entry[1:].startswith('fsanitize'):
+            return True
+        if entry[1:] in frozenset(['Zi', 'Z7', 'ZI']):
             return True
         return entry[1:].startswith('M')
 
@@ -959,13 +989,13 @@ class Vs2010Backend(backends.Backend):
                 other.append(arg)
         return lpaths, libs, other
 
-    def _get_cl_compiler(self, target):
+    def _get_cl_compiler(self, target: build.BuildTarget):
         for lang, c in target.compilers.items():
             if lang in {'c', 'cpp'}:
                 return c
-        # No source files, only objects, but we still need a compiler, so
+        # No C/C++ source files, only objects/assembly source, but we still need a compiler, so
         # return a found compiler
-        if len(target.objects) > 0:
+        if len(target.objects) > 0 or len(target.sources) > 0:
             for lang, c in self.environment.coredata.compilers[target.for_machine].items():
                 if lang in {'c', 'cpp'}:
                     return c
@@ -1002,9 +1032,9 @@ class Vs2010Backend(backends.Backend):
                 file_args[l] += compilers.get_base_compile_args(
                     target, comp, self.environment)
                 file_args[l] += comp.get_option_compile_args(
-                    target, self.environment, target.subproject)
+                    target, target.subproject)
                 file_args[l] += comp.get_option_std_args(
-                    target, self.environment, target.subproject)
+                    target, target.subproject)
 
         # Add compile args added using add_project_arguments()
         for l, args in self.build.projects_args[target.for_machine].get(target.subproject, {}).items():
@@ -1122,11 +1152,10 @@ class Vs2010Backend(backends.Backend):
 
         return (target_args, file_args), (target_defines, file_defines), (target_inc_dirs, file_inc_dirs)
 
-    @staticmethod
-    def get_build_args(compiler, optimization_level: str, debug: bool, sanitize: str) -> T.List[str]:
+    def get_build_args(self, target: build.BuildTarget, compiler, optimization_level: str, debug: bool, sanitize: str) -> T.List[str]:
         build_args = compiler.get_optimization_args(optimization_level)
         build_args += compiler.get_debug_args(debug)
-        build_args += compiler.sanitizer_compile_args(sanitize)
+        build_args += compiler.sanitizer_compile_args(target, sanitize)
 
         return build_args
 
@@ -1328,11 +1357,11 @@ class Vs2010Backend(backends.Backend):
         if '/fsanitize=address' in build_args:
             ET.SubElement(type_config, 'EnableASAN').text = 'true'
         # Debug format
-        if '/ZI' in build_args:
+        if '/ZI' in build_args or '-ZI' in build_args:
             ET.SubElement(clconf, 'DebugInformationFormat').text = 'EditAndContinue'
-        elif '/Zi' in build_args:
+        elif '/Zi' in build_args or '-Zi' in build_args:
             ET.SubElement(clconf, 'DebugInformationFormat').text = 'ProgramDatabase'
-        elif '/Z7' in build_args:
+        elif '/Z7' in build_args or '-Z7' in build_args:
             ET.SubElement(clconf, 'DebugInformationFormat').text = 'OldStyle'
         else:
             ET.SubElement(clconf, 'DebugInformationFormat').text = 'None'
@@ -1441,7 +1470,7 @@ class Vs2010Backend(backends.Backend):
         # to be after all internal and external libraries so that unresolved
         # symbols from those can be found here. This is needed when the
         # *_winlibs that we want to link to are static mingw64 libraries.
-        extra_link_args += compiler.get_option_link_args(target, self.environment, target.subproject)
+        extra_link_args += compiler.get_option_link_args(target, target.subproject)
         (additional_libpaths, additional_links, extra_link_args) = self.split_link_args(extra_link_args.to_native())
 
         # Add more libraries to be linked if needed
@@ -1460,13 +1489,13 @@ class Vs2010Backend(backends.Backend):
                     # Unfortunately, we can't use self.object_filename_from_source()
                     for gen in l.genlist:
                         for src in gen.get_outputs():
-                            if self.environment.is_source(src):
+                            if compilers.is_source(src):
                                 path = self.get_target_generated_dir(t, gen, src)
                                 gen_src_ext = '.' + os.path.splitext(path)[1][1:]
                                 extra_link_args.append(path[:-len(gen_src_ext)] + '.obj')
 
                     for src in l.srclist:
-                        if self.environment.is_source(src):
+                        if compilers.is_source(src):
                             target_private_dir = self.relpath(self.get_target_private_dir(t),
                                                               self.get_target_dir(t))
                             rel_obj = self.object_filename_from_source(t, compiler, src, target_private_dir)
@@ -1555,7 +1584,7 @@ class Vs2010Backend(backends.Backend):
     # once a build/compile has generated these sources.
     #
     # This modifies the paths in 'gen_files' in place, as opposed to returning a new list of modified paths.
-    def relocate_generated_file_paths_to_concrete_build_dir(self, gen_files: T.List[str], target: T.Union[build.Target, build.CustomTargetIndex]) -> None:
+    def relocate_generated_file_paths_to_concrete_build_dir(self, gen_files: T.List[str], target: build.AnyTargetType) -> None:
         (_, build_dir_tail) = os.path.split(self.src_to_build)
         meson_build_dir_for_buildtype = build_dir_tail[:-2] + coredata.get_genvs_default_buildtype_list()[0] # Get the first buildtype suffixed dir (i.e. '[builddir]_debug') from '[builddir]_vs'
         # Relative path from this .vcxproj to the directory containing the set of '..._[debug/debugoptimized/release]' setup meson build dirs.
@@ -1611,6 +1640,8 @@ class Vs2010Backend(backends.Backend):
         else:
             platform = self.platform
 
+        masm = self.get_masm_type(target)
+
         tfilename = os.path.splitext(target.get_filename())
 
         (root, type_config) = self.create_basic_project(tfilename[0],
@@ -1619,7 +1650,8 @@ class Vs2010Backend(backends.Backend):
                                                         conftype=conftype,
                                                         target_ext=tfilename[1],
                                                         target_platform=platform,
-                                                        gen_manifest=self.get_gen_manifest(target))
+                                                        gen_manifest=self.get_gen_manifest(target),
+                                                        masm_type=masm)
 
         generated_files, custom_target_output_files, generated_files_include_dirs = self.generate_custom_generator_commands(
             target, root)
@@ -1629,7 +1661,7 @@ class Vs2010Backend(backends.Backend):
         gen_hdrs += custom_hdrs
 
         compiler = self._get_cl_compiler(target)
-        build_args = Vs2010Backend.get_build_args(compiler, self.optimization, self.debug, self.sanitize)
+        build_args = self.get_build_args(target, compiler, self.optimization, self.debug, self.sanitize)
 
         assert isinstance(target, (build.Executable, build.SharedLibrary, build.StaticLibrary, build.SharedModule)), 'for mypy'
         # Prefix to use to access the build root from the vcxproj dir
@@ -1662,25 +1694,25 @@ class Vs2010Backend(backends.Backend):
             else:
                 return False
 
-        pch_sources = {}
+        pch_sources: T.Dict[str, T.Tuple[str, T.Optional[str], str, T.Optional[str]]] = {}
         if self.target_uses_pch(target):
             for lang in ['c', 'cpp']:
-                pch = target.get_pch(lang)
+                pch = target.pch[lang]
                 if not pch:
                     continue
                 if compiler.id == 'msvc':
-                    if len(pch) == 1:
+                    if pch[1] is None:
                         # Auto generate PCH.
                         src = os.path.join(proj_to_build_root, self.create_msvc_pch_implementation(target, lang, pch[0]))
                         pch_header_dir = os.path.dirname(os.path.join(proj_to_src_dir, pch[0]))
                     else:
                         src = os.path.join(proj_to_src_dir, pch[1])
                         pch_header_dir = None
-                    pch_sources[lang] = [pch[0], src, lang, pch_header_dir]
+                    pch_sources[lang] = (pch[0], src, lang, pch_header_dir)
                 else:
                     # I don't know whether its relevant but let's handle other compilers
                     # used with a vs backend
-                    pch_sources[lang] = [pch[0], None, lang, None]
+                    pch_sources[lang] = (pch[0], None, lang, None)
 
         previous_includes = []
         if len(headers) + len(gen_hdrs) + len(target.extra_files) + len(pch_sources) > 0:
@@ -1723,12 +1755,17 @@ class Vs2010Backend(backends.Backend):
             for s in sources:
                 relpath = os.path.join(proj_to_build_root, s.rel_to_builddir(self.build_to_src))
                 if path_normalize_add(relpath, previous_sources):
-                    inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=relpath)
+                    lang = Vs2010Backend.lang_from_source_file(s)
+                    if lang == 'masm' and masm:
+                        inc_cl = ET.SubElement(inc_src, masm.upper(), Include=relpath)
+                    else:
+                        inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=relpath)
+
                     if self.gen_lite:
                         self.add_project_nmake_defs_incs_and_opts(inc_cl, relpath, defs_paths_opts_per_lang_and_buildtype, platform)
                     else:
-                        lang = Vs2010Backend.lang_from_source_file(s)
-                        self.add_pch(pch_sources, lang, inc_cl)
+                        if lang != 'masm':
+                            self.add_pch(pch_sources, lang, inc_cl)
                         self.add_additional_options(lang, inc_cl, file_args)
                         self.add_preprocessor_defines(lang, inc_cl, file_defines)
                         self.add_include_dirs(lang, inc_cl, file_inc_dirs)
@@ -1736,12 +1773,17 @@ class Vs2010Backend(backends.Backend):
                             self.object_filename_from_source(target, compiler, s)
             for s in gen_src:
                 if path_normalize_add(s, previous_sources):
-                    inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=s)
+                    lang = Vs2010Backend.lang_from_source_file(s)
+                    if lang == 'masm' and masm:
+                        inc_cl = ET.SubElement(inc_src, masm.upper(), Include=s)
+                    else:
+                        inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=s)
+
                     if self.gen_lite:
                         self.add_project_nmake_defs_incs_and_opts(inc_cl, s, defs_paths_opts_per_lang_and_buildtype, platform)
                     else:
-                        lang = Vs2010Backend.lang_from_source_file(s)
-                        self.add_pch(pch_sources, lang, inc_cl)
+                        if lang != 'masm':
+                            self.add_pch(pch_sources, lang, inc_cl)
                         self.add_additional_options(lang, inc_cl, file_args)
                         self.add_preprocessor_defines(lang, inc_cl, file_defines)
                         self.add_include_dirs(lang, inc_cl, file_inc_dirs)
@@ -1790,6 +1832,9 @@ class Vs2010Backend(backends.Backend):
                     ET.SubElement(inc_objs, 'Object', Include=s)
 
         ET.SubElement(root, 'Import', Project=r'$(VCTargetsPath)\Microsoft.Cpp.targets')
+        ext_tgt_grp = ET.SubElement(root, 'ImportGroup', Label='ExtensionTargets')
+        if masm:
+            ET.SubElement(ext_tgt_grp, 'Import', Project=rf'$(VCTargetsPath)\BuildCustomizations\{masm}.targets')
         self.add_regen_dependency(root)
         if not self.gen_lite:
             # Injecting further target dependencies into this vcxproj implies and forces a Visual Studio BUILD dependency,
@@ -2101,7 +2146,7 @@ class Vs2010Backend(backends.Backend):
 
     # Returns if a target generates a manifest or not.
     # Returns 'embed' if the generated manifest is embedded.
-    def get_gen_manifest(self, target):
+    def get_gen_manifest(self, target: T.Optional[build.BuildTarget]):
         if not isinstance(target, build.BuildTarget):
             return True
 
@@ -2123,3 +2168,26 @@ class Vs2010Backend(backends.Backend):
             if arg == '/MANIFEST' or arg.startswith('/MANIFEST:'):
                 break
         return True
+
+    # FIXME: add a way to distinguish between arm64ec+marmasm (written in ARM assembly)
+    # and arm64ec+masm (written in x64 assembly).
+    #
+    # For now, assume it's the native ones. (same behavior as ninja backend)
+    def get_masm_type(self, target: build.BuildTarget):
+        if not isinstance(target, build.BuildTarget):
+            return None
+
+        if 'masm' not in target.compilers:
+            return None
+
+        if target.for_machine == MachineChoice.BUILD:
+            platform = self.build_platform
+        elif target.for_machine == MachineChoice.HOST:
+            platform = self.platform
+        else:
+            return None
+
+        if platform in {'ARM', 'arm64', 'arm64ec'}:
+            return 'marmasm'
+        else:
+            return 'masm'
